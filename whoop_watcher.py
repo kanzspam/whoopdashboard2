@@ -59,7 +59,7 @@ def ensure_repo():
 def push_to_github():
     """Commit and push the updated dashboard HTML to GitHub."""
     try:
-        subprocess.run(["git", "-C", REPO_DIR, "add", "whoop_dashboard.html"],
+        subprocess.run(["git", "-C", REPO_DIR, "add", "index.html"],
                        check=True, capture_output=True)
         result = subprocess.run(
             ["git", "-C", REPO_DIR, "commit", "-m",
@@ -512,8 +512,23 @@ class WhoopHandler(FileSystemEventHandler):
             print(f"✅ Dashboard updated")
             print(f"   Recovery: {data['recovery']}%  |  HRV: {data['hrv']}ms  |  Sleep: {data['sleep_h']}h{data['sleep_mm']}m")
             push_to_github()
+            self.cleanup(filepath)
         except Exception as e:
             print(f"❌ Error: {e}")
+
+    def cleanup(self, csv_path):
+        """Delete the CSV and any matching ZIP from Downloads after a successful push."""
+        try:
+            os.remove(csv_path)
+            print(f"🗑️  Deleted CSV: {os.path.basename(csv_path)}")
+        except Exception as e:
+            print(f"⚠️  Could not delete CSV: {e}")
+        for zip_file in glob.glob(os.path.join(WATCH_FOLDER, "whoop*.zip")):
+            try:
+                os.remove(zip_file)
+                print(f"🗑️  Deleted ZIP: {os.path.basename(zip_file)}")
+            except Exception as e:
+                print(f"⚠️  Could not delete ZIP: {e}")
 
 
 def process_existing():
