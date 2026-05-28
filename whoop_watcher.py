@@ -56,8 +56,38 @@ def ensure_repo():
         subprocess.run(["git", "-C", REPO_DIR, "pull", "--quiet"], capture_output=True)
 
 
+NETLIFY_URL = "https://radiant-phoenix-d5fff8.netlify.app/"
+
+
+def verify_netlify_updated(expected_timestamp):
+    """Poll Netlify until the page reflects the new timestamp or timeout."""
+    import urllib.request
+    print("🔍 Checking Netlify for update...", flush=True)
+    for attempt in range(12):
+        time.sleep(10)
+        try:
+            with urllib.request.urlopen(NETLIFY_URL, timeout=10) as r:
+                html = r.read().decode("utf-8", errors="ignore")
+            if expected_timestamp in html:
+                print(f"✅ Netlify is live with your new data!")
+                return True
+            else:
+                print(f"   Waiting... ({(attempt+1)*10}s)", flush=True)
+        except Exception as e:
+            print(f"   Could not reach Netlify: {e}", flush=True)
+    print("⚠️  Netlify did not update within 2 minutes — check your deploy log.")
+    return False
+
+
 def push_to_github():
-    """Commit and push the updated dashboard HTML to GitHub."""
+    """Verify index.html exists, commit, push, then confirm Netlify updated."""
+    index_path = os.path.join(REPO_DIR, "index.html")
+    if not os.path.exists(index_path):
+        print("❌ index.html not found in repo folder — something went wrong generating it.")
+        return False
+
+    print(f"✅ index.html confirmed ({os.path.getsize(index_path):,} bytes)")
+
     try:
         subprocess.run(["git", "-C", REPO_DIR, "add", "index.html"],
                        check=True, capture_output=True)
@@ -68,12 +98,16 @@ def push_to_github():
         )
         if "nothing to commit" in result.stdout:
             print("   No changes to push.")
-            return
+            return True
         subprocess.run(["git", "-C", REPO_DIR, "push"], check=True, capture_output=True)
-        print("🚀 Pushed to GitHub — Netlify will update in ~30 seconds")
+        print("🚀 Pushed to GitHub — waiting for Netlify...")
+        timestamp = datetime.now().strftime("%b %d, %Y")
+        verify_netlify_updated(timestamp)
+        return True
     except subprocess.CalledProcessError as e:
         print(f"❌ Git push failed: {e}")
         print("   Make sure you have push access and git credentials are configured.")
+        return False
 
 
 def parse_whoop_csv(filepath):
@@ -517,18 +551,38 @@ class WhoopHandler(FileSystemEventHandler):
             print(f"❌ Error: {e}")
 
     def cleanup(self, csv_path):
-        """Delete the CSV and any matching ZIP from Downloads after a successful push."""
-        try:
-            os.remove(csv_path)
-            print(f"🗑️  Deleted CSV: {os.path.basename(csv_path)}")
-        except Exception as e:
-            print(f"⚠️  Could not delete CSV: {e}")
-        for zip_file in glob.glob(os.path.join(WATCH_FOLDER, "whoop*.zip")):
-            try:
-                os.remove(zip_file)
-                print(f"🗑️  Deleted ZIP: {os.path.basename(zip_file)}")
-            except Exception as e:
-                print(f"⚠️  Could not delete ZIP: {e}")
+        """Delete anything in Downloads with 'whoop' in the name or today's date."""
+        today = datetime.now()
+        date_formats = [
+            today.strftime("%Y-%m-%d"),
+            today.strftime("%Y%m%d"),
+            today.strftime("%m-%d-%Y"),
+            today.strftime("%m%d%Y"),
+            today.strftime("%d-%m-%Y"),
+        ]
+
+        deleted = []
+        for item in os.listdir(WATCH_FOLDER):
+            item_lower = item.lower()
+            item_path = os.path.join(WATCH_FOLDER, item)
+            should_delete = (
+                ("whoop" in item_lower or any(d in item for d in date_formats))
+                and item_lower != "whoop_watcher.py"
+            )
+            if should_delete:
+                try:
+                    if os.path.isdir(item_path):
+                        import shutil
+                        shutil.rmtree(item_path, onerror=lambda a,n,e: (os.chmod(n, 0o777), a(n)))
+                    else:
+                        os.remove(item_path)
+                    deleted.append(item)
+                    print(f"🗑️  Deleted: {item}")
+                except Exception as e:
+                    print(f"⚠️  Could not delete {item}: {e}")
+
+        if not deleted:
+            print("   Nothing extra to clean up.")
 
 
 def process_existing():
